@@ -1,15 +1,9 @@
 # lazy load modules with fallbacks for small speed-sensitive scripts
 
-# lazy load Getopt::Long::VersionMessage
 sub version {
-    if ( eval { require Getopt::Long } ) {
-        return Getopt::Long::VersionMessage(@_);
-    }
-    else {
-        ## no critic (PunctuationVars)
-        print("$0 version $VERSION\n(perl version $^V)\n");
-        exit(0);
-    }
+    ## no critic (PunctuationVars)
+    print("$0 version $main::VERSION\n(perl version $^V)\n");
+    exit;
 }
 
 # lazy load Pod::Usage::pod2usage
