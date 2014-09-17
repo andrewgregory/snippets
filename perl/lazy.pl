@@ -6,13 +6,9 @@ sub version {
     exit;
 }
 
-# lazy load Pod::Usage::pod2usage
 sub usage {
-    if ( eval { require Pod::Usage } ) {
-        return Pod::Usage::pod2usage(@_);
-    }
-    else {
-        print( do { local $/ = undef; <DATA> }, "\n" );
-        exit(1);
-    }
+    eval { require Pod::Usage } and goto \&Pod::Usage::pod2usage;
+    eval { require Pod::Text } and Pod::Text->filter( \*DATA ), exit;
+    print( readline(DATA), "\n" );
+    exit 1;
 }
