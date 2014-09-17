@@ -1,4 +1,9 @@
-# lazy load modules with fallbacks for small speed-sensitive scripts
+package Usage;
+
+use strict;
+use warnings;
+
+our $VERSION = 'v1.0.0';
 
 sub version {
     ## no critic (PunctuationVars)
@@ -12,3 +17,5 @@ sub usage {
     print( readline(DATA), "\n" );
     exit 1;
 }
+
+1;
