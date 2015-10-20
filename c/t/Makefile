@@ -2,7 +2,8 @@ CFLAGS += -Wall -Wextra -g -I..
 
 PROVE ?= prove
 
-TESTS =
+TESTS = \
+		10-wordsplit.t
 
 %.t: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) $< $(LDLIBS) -o $@
