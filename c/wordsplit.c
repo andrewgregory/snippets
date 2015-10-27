@@ -67,10 +67,10 @@ char **wordsplit(char *str) {
                     errno = EINVAL;
                     goto error;
                 }
-            } else if(*end == '\\' && (end[1] == '\'' || end[1] == '"')) {
-                end++;
-                wordlen++;
             } else {
+                if(*end == '\\' && (end[1] == '\'' || end[1] == '"')) {
+                    end++; /* skip the '\\' */
+                }
                 wordlen++;
             }
         }
@@ -85,22 +85,19 @@ char **wordsplit(char *str) {
             while(c < end) {
                 if(*c == '\'' || *c == '"') {
                     char quote = *c;
-                    int escaped = 0;
                     /* we know there must be a matching end quote,
                      * no need to check for '\0' */
-                    for(c++; escaped || *c != quote; c++) {
+                    for(c++; *c != quote; c++) {
                         if(*c == '\\' && *(c + 1) == quote) {
-                            escaped = 1;
-                        } else {
-                            escaped = 0;
-                            *(dest++) = *c;
+                            c++;
                         }
+                        *(dest++) = *c;
                     }
                     c++;
-                } else if(*c == '\\' && (c[1] == '\'' || c[1] == '"')) {
-                    c++; /* skip the '\\' */
-                    *(dest++) = *(c++); /* copy the quote directly */
                 } else {
+                    if(*c == '\\' && (c[1] == '\'' || c[1] == '"')) {
+                        c++; /* skip the '\\' */
+                    }
                     *(dest++) = *(c++);
                 }
             }
