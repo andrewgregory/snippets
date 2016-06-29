@@ -6,6 +6,7 @@ TESTS = \
 		10-fuzzy.t \
 		10-mbscasecmp.t \
 		10-pathcmp.t \
+		10-strjoin.t \
 		10-wordsplit.t
 
 %.t: %.c
