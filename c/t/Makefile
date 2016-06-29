@@ -3,6 +3,7 @@ CFLAGS += -Wall -Wextra -g -I..
 PROVE ?= prove
 
 TESTS = \
+		10-asprintf.t \
 		10-fuzzy.t \
 		10-mbscasecmp.t \
 		10-pathcmp.t \
