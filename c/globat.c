@@ -10,10 +10,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-static int _glob_isdotdir(const char *c) {
-    return (c[0] == '.' && (c[1] == '\0' || (c[1] == '.' && c[2] == '\0')));
-}
-
 void _glob_freepattern(char **parts) {
     char **p;
     if(parts == NULL) { return; }
@@ -34,11 +30,17 @@ char **_glob_split_pattern(const char *pattern) {
     size_t i, count = 0;
     char **parts;
     const char *c;
+
     for(c = pattern + 1; *c != '\0'; c++) {
-        count += *c == '/';
-        c += *c == '/';
+        int match = *c == '/';
+        count += match;
+        c += match;
     }
-    parts = calloc(sizeof(char*), count + 5);
+
+    if((parts = calloc(sizeof(char*), count + 1)) == NULL) {
+        return NULL;
+    }
+
     for(i = 0, c = pattern; *c != '\0'; i++) {
         const char *sep = strchrnul(c + 1, '/');
         if(sep[0] != '\0' && sep[1] == '\0') { sep += 1; }
@@ -46,6 +48,7 @@ char **_glob_split_pattern(const char *pattern) {
         if(sep[0] == '\0') { break; }
         c = sep + 1;
     }
+
     return parts;
 }
 
@@ -78,27 +81,44 @@ int _globcmp(const void *p1, const void *p2) {
     return strcmp(* (char * const *) p1, * (char * const *) p2);
 }
 
-int _globat(int fd, char **pattern, int flags, glob_t *pglob, const char *base) {
+int _globat(int fd, char **pattern, int flags,
+        int (*errfunc) (const char *epath, int eerrno),
+        glob_t *pglob, const char *base) {
+    const char *epath = (base && base[0]) ? base : ".";
     char path[PATH_MAX];
     int dirfd;
     DIR *dir;
     struct dirent *entry;
     int fnflags = FNM_PERIOD;
 
-    if((dirfd = openat(fd, ".", O_DIRECTORY)) == -1) { return GLOB_ABORTED; }
-    if((dir = fdopendir(dirfd)) == NULL) { close(dirfd); return GLOB_ABORTED; }
-
     if(!(flags & GLOB_APPEND)) {
         pglob->gl_pathc = 0;
         pglob->gl_pathv = NULL;
     }
 
+    if(flags & GLOB_NOESCAPE) { fnflags |= FNM_NOESCAPE; }
+#ifdef GLOB_PERIOD
     if(flags & GLOB_PERIOD) { fnflags &= ~FNM_PERIOD; }
+#endif
+
+#define MAYBE_ABORT(p, n) if( (errfunc && errfunc(p, n) != 0) \
+        || flags & GLOB_ERR) \
+    { return GLOB_ABORTED; }
+
+    if((dirfd = openat(fd, ".", O_DIRECTORY)) == -1) {
+        MAYBE_ABORT(epath, errno)
+        return 0;
+    }
+    if((dir = fdopendir(dirfd)) == NULL) {
+        int err = errno;
+        close(dirfd);
+        MAYBE_ABORT(epath, err)
+        return 0;
+    }
 
     while((errno = 0, entry = readdir(dir))) {
         struct stat sbuf;
 
-        if(_glob_isdotdir(entry->d_name)) { continue; }
         if(fnmatch(pattern[0], entry->d_name, fnflags) != 0) { continue; }
 
         if(base && base[0]) {
@@ -108,9 +128,8 @@ int _globat(int fd, char **pattern, int flags, glob_t *pglob, const char *base) 
         }
 
         if(fstatat(fd, entry->d_name, &sbuf, 0) != 0) {
-            /* errfunc(path, errno) */
-            if(flags & GLOB_ERR) { return GLOB_ABORTED; }
-            else { continue; }
+            MAYBE_ABORT(path, errno);
+            continue;
         }
 
         if(pattern[1] == NULL) {
@@ -126,30 +145,46 @@ int _globat(int fd, char **pattern, int flags, glob_t *pglob, const char *base) 
         } else {
             /* pattern is not yet exhausted: check directory contents */
             int child = openat(fd, entry->d_name, O_DIRECTORY);
-            int ret = _globat(child, pattern + 1, flags | GLOB_APPEND | GLOB_NOSORT, pglob, path);
+            if(child == -1) {
+                MAYBE_ABORT(path, errno);
+                continue;
+            }
+
+            int ret = _globat(child, pattern + 1,
+                    flags | GLOB_APPEND | GLOB_NOSORT, errfunc, pglob, path);
             close(child);
             if(ret != 0) { closedir(dir); return ret; }
         }
     }
     closedir(dir);
+
     if(errno != 0 && GLOB_ERR) {
         return GLOB_ABORTED;
     }
+
     if(!(flags & GLOB_NOSORT)) {
         char **p = pglob->gl_pathv;
         if(flags & GLOB_DOOFFS) { p += pglob->gl_offs; }
         qsort(p, pglob->gl_pathc, sizeof(char*), _globcmp);
     }
+
     return 0;
 }
 
-int globat(int fd, const char *pattern, int flags, glob_t *pglob) {
-    if(fd == AT_FDCWD || pattern[0] == '/')
-        { return glob(pattern, flags, NULL, pglob); }
+int globat(int fd, const char *pattern, int flags,
+        int (*errfunc) (const char *epath, int eerrno), glob_t *pglob) {
     char **parts = _glob_split_pattern(pattern);
-    int ret = _globat(fd, parts, flags, pglob, "");
+    int ret = _globat(fd, parts, flags, errfunc, pglob, "");
     _glob_freepattern(parts);
-    return ret;
+
+    if(ret != 0 || pglob->gl_pathc > 0) {
+        return ret;
+    } else if(flags & GLOB_NOCHECK) {
+        _glob_append(pglob, strdup(pattern), flags);
+        return 0;
+    } else {
+        return GLOB_NOMATCH;
+    }
 }
 
 int globat2(int fd, const char *pattern, int flags, glob_t *pglob) {
@@ -163,18 +198,18 @@ int globat2(int fd, const char *pattern, int flags, glob_t *pglob) {
     return ret;
 }
 
-int globdir(const char *dir, const char *pattern, int flags, glob_t *pglob) {
+int globdir(const char *dir, const char *pattern, int flags,
+        int (*errfunc) (const char *epath, int eerrno), glob_t *pglob) {
     int fd = open(dir, O_DIRECTORY);
-    int ret = globat(fd, pattern, flags, pglob);
+    int ret = globat(fd, pattern, flags, errfunc, pglob);
     close(fd);
     return ret;
 }
 
-#include <stdio.h>
 int main(int argc, char *argv[]) {
     size_t i;
     glob_t pglob = {0};
-    int ret = globdir(argv[1], argv[2], 0, &pglob);
+    int ret = globdir(argv[1], argv[2], 0, NULL, &pglob);
     printf("globdir(\"%s\", \"%s\") = %d\n", argv[1], argv[2], ret);
     printf("count: %zd\n", pglob.gl_pathc);
     for(i = 0; i < pglob.gl_pathc; i++) {
@@ -183,4 +218,3 @@ int main(int argc, char *argv[]) {
     globatfree(&pglob);
     return ret;
 }
-
