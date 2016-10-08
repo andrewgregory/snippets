@@ -17,16 +17,48 @@ void _glob_freepattern(char **parts) {
     free(parts);
 }
 
-void globatfree(glob_t *g) {
-	size_t i;
-	for (i=0; i < g->gl_pathc; i++)
-		free(g->gl_pathv[g->gl_offs + i]);
-	free(g->gl_pathv);
-	g->gl_pathc = 0;
-	g->gl_pathv = NULL;
+char **_glob_split_pattern(const char *pattern) {
+    size_t i, count = 1;
+    char **parts;
+    const char *c;
+
+    if(pattern == NULL || pattern[0] == '\0') {
+        return calloc(sizeof(char*), 1);
+    }
+
+    for(c = pattern; *c != '\0'; c++) {
+        if(*c == '/') {
+            count++;
+            while(*c == '/') { c++; }
+        }
+    }
+
+    if((parts = calloc(sizeof(char*), count + 1)) == NULL) {
+        return NULL;
+    }
+
+    c = pattern;
+    i = 0;
+    if(*c == '/') {
+        parts[i++] = strdup("/");
+        while(*c == '/') { c++; }
+    }
+    while(1) {
+        const char *sep = strchrnul(c, '/');
+        parts[i++] = strndup(c, sep - c);
+
+        if(sep[0] == '\0') { break; }
+
+        while(sep[1] == '/') { sep++; }
+
+        if(sep[1] == '\0') { parts[i++] = strdup("/"); break; }
+        else { c = sep + 1; }
+    }
+
+    return parts;
 }
 
-char **_glob_split_pattern(const char *pattern) {
+char **_glob_split_pattern2(const char *pattern) {
     size_t i, count = 0;
     char **parts;
     const char *c;
@@ -86,7 +118,6 @@ int _globat(int fd, char **pattern, int flags,
         glob_t *pglob, const char *base) {
     const char *epath = (base && base[0]) ? base : ".";
     char path[PATH_MAX];
-    int dirfd;
     DIR *dir;
     struct dirent *entry;
     int fnflags = FNM_PERIOD;
@@ -105,13 +136,9 @@ int _globat(int fd, char **pattern, int flags,
         || flags & GLOB_ERR) \
     { return GLOB_ABORTED; }
 
-    if((dirfd = openat(fd, ".", O_DIRECTORY)) == -1) {
-        MAYBE_ABORT(epath, errno)
-        return 0;
-    }
-    if((dir = fdopendir(dirfd)) == NULL) {
+    if((dir = fdopendir(fd)) == NULL) {
         int err = errno;
-        close(dirfd);
+        close(fd);
         MAYBE_ABORT(epath, err)
         return 0;
     }
@@ -121,7 +148,7 @@ int _globat(int fd, char **pattern, int flags,
 
         if(fnmatch(pattern[0], entry->d_name, fnflags) != 0) { continue; }
 
-        if(base && base[0]) {
+        if(base) {
             snprintf(path, PATH_MAX, "%s/%s", base, entry->d_name);
         } else {
             snprintf(path, PATH_MAX, "%s", entry->d_name);
@@ -138,7 +165,7 @@ int _globat(int fd, char **pattern, int flags,
             _glob_append(pglob, strdup(path), flags);
         } else if(!S_ISDIR(sbuf.st_mode)) {
             /* pattern is not exhausted, but entry is a file: no match */
-        } else if(pattern[1] == "/") {
+        } else if(pattern[1][0] == '/') {
             /* pattern requires a directory and is exhausted: match */
             if(S_ISDIR(sbuf.st_mode) && flags & GLOB_MARK) { strcat(path, "/"); }
             _glob_append(pglob, strdup(path), flags);
@@ -173,8 +200,27 @@ int _globat(int fd, char **pattern, int flags,
 
 int globat(int fd, const char *pattern, int flags,
         int (*errfunc) (const char *epath, int eerrno), glob_t *pglob) {
-    char **parts = _glob_split_pattern(pattern);
-    int ret = _globat(fd, parts, flags, errfunc, pglob, "");
+    char **parts, *base;
+    int ret;
+
+    if(pattern[0] == '/') {
+        base = "";
+        fd = open("/", O_DIRECTORY);
+        while(pattern[0] == '/') { pattern++; }
+    } else {
+        fd = openat(fd, ".", O_DIRECTORY);
+        base = NULL;
+    }
+
+    if(fd == -1) {
+        return (flags & GLOB_ERR) ?  GLOB_ABORTED : GLOB_NOMATCH;
+    }
+    if((parts = _glob_split_pattern(pattern)) == NULL) {
+        close(fd);
+        return GLOB_NOSPACE;
+    }
+
+    ret = _globat(fd, parts, flags, errfunc, pglob, base);
     _glob_freepattern(parts);
 
     if(ret != 0 || pglob->gl_pathc > 0) {
@@ -196,6 +242,15 @@ int globat2(int fd, const char *pattern, int flags, glob_t *pglob) {
     close(cwd);
 
     return ret;
+}
+
+void globatfree(glob_t *g) {
+	size_t i;
+	for (i=0; i < g->gl_pathc; i++)
+		free(g->gl_pathv[g->gl_offs + i]);
+	free(g->gl_pathv);
+	g->gl_pathc = 0;
+	g->gl_pathv = NULL;
 }
 
 int globdir(const char *dir, const char *pattern, int flags,
